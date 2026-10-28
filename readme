@@ -137,6 +137,5 @@ Add data quality checks as an Airflow task, build a country lookup table, model 
 
 All data comes from the public [Longevity World Cup](https://longevityworldcup.com) API. Credit to them for publishing it. The data describes real people, so please use it respectfully: this project is for learning data engineering, not for republishing anyone's personal health information.
 
----
 
-Built by Adithya Nair · [GitHub](https://github.com/DeepstuffxP)
+
