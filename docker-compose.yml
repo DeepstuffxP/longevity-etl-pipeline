@@ -1,0 +1,15 @@
+services:
+  airflow:
+    image: apache/airflow:2.10.5
+    command: standalone
+    ports:
+      - "8080:8080"
+    env_file: .env
+    environment:
+      DB_HOST: host.docker.internal
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      _PIP_ADDITIONAL_REQUIREMENTS: "python-dotenv requests psycopg2-binary"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./src:/opt/airflow/src
+      - ./data:/opt/airflow/data
