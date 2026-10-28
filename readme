@@ -1,0 +1,142 @@
+# Longevity ETL Pipeline
+
+A small but complete data pipeline. Every day it pulls the public [Longevity World Cup](https://longevityworldcup.com) leaderboard, keeps an untouched copy of what it received, and loads a cleaned version into a PostgreSQL warehouse. Apache Airflow (running in Docker) schedules and supervises the whole thing.
+
+![Airflow DAG](docs/airflow_graph.png)
+
+## Why I built this
+
+I come from backend development (FastAPI, Spring Boot) and wanted hands-on practice with the data engineering side: orchestration, warehouse modeling, and loads that are safe to re-run. I picked this dataset because it's public, needs no API key, and is messy in interesting ways: nested JSON, sparse fields, inconsistent country names, and values that quietly mean "no data".
+
+The dataset is small (244 athletes at the time of writing). That's fine. The point of this project is the engineering around the data, not the volume.
+
+## What it does
+
+```
+Public API
+   |
+   v
+extract         -> saves the raw JSON, stamped with the pull time (data/raw/)
+   |
+   v
+load_raw        -> copies each file into Postgres as JSONB (raw layer)
+   |
+   v
+load_warehouse  -> reshapes into dimension + fact tables (warehouse layer)
+```
+
+![Architecture](docs/architecture.png)
+
+Because the API only ever shows *today's* leaderboard, the pipeline stores a snapshot per day. After a few weeks you can see how athletes moved up and down the rankings, which the source doesn't offer.
+
+## The data model
+
+![ERD](docs/erd.png)
+
+| Table | One row means |
+|---|---|
+| `raw.athletes_snapshot` | one saved pull of the athletes endpoint (whole JSON in a JSONB column) |
+| `warehouse.dim_athlete` | one athlete |
+| `warehouse.fact_biomarker_result` | one lab value for one athlete on one test date |
+| `warehouse.fact_athlete_daily` | one athlete on one snapshot day (placement, crowd age, submission count) |
+| `warehouse.dim_marker` | one type of lab marker (name and unit) |
+
+As of 26 Oct 2026 the warehouse holds 244 athletes and 3,966 lab values.
+
+## Design decisions
+
+**Keep the raw data.** The first thing that happens to API data is that it gets saved exactly as received, both as a file and in a Postgres JSONB column. If my cleaning logic turns out to be wrong, I fix it and reprocess instead of asking the API again.
+
+**Loads are idempotent.** Running the pipeline twice must not create duplicates. Raw files are deduplicated by filename (`UNIQUE` + `ON CONFLICT DO NOTHING`), and warehouse tables use primary keys with `ON CONFLICT DO UPDATE`. I checked this by running the loads repeatedly and confirming the athlete and lab-value counts didn't change.
+
+**Wide JSON becomes tidy rows.** Each athlete's lab records arrive as nested objects with up to ~20 markers, many missing. The load turns that into one row per athlete, date, and marker, which is much easier to query.
+
+**Daily snapshots for things that change.** Lab results never change once recorded, so they're upserted. Placement and crowd guesses change daily, so they go into a snapshot table keyed by date and athlete.
+
+**Privacy by design.** The API response includes contact emails and full dates of birth. The warehouse deliberately keeps only the birth year, and no contact details. The raw JSON files on disk do contain the original data, so the `data/` folder is gitignored and never committed.
+
+**Small data-cleaning rules.** A crowd age of `0` with zero guesses means "nobody guessed yet", so it's stored as `NULL`, not as an age of zero. Floating-point noise in lab values is rounded.
+
+## Tech stack
+
+Python, PostgreSQL (JSONB), Apache Airflow 2.10, Docker / Docker Compose, psycopg2, requests.
+
+## Running it yourself
+
+I built and tested this on Windows with Docker Desktop and a local PostgreSQL install. Postgres runs on your machine; only Airflow runs in Docker.
+
+**1. Set up Python**
+
+```powershell
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+**2. Create the database**
+
+Create an empty database named `longevity` in Postgres, then run the two SQL files in order:
+
+```powershell
+psql -U postgres -d longevity -f sql/01_schema.sql
+psql -U postgres -d longevity -f sql/02_warehouse.sql
+```
+
+**3. Add your settings**
+
+Copy `.env.example` to `.env` and put in your real Postgres password.
+
+**4. Try the steps by hand (optional, but good for understanding)**
+
+```powershell
+python src/extract.py
+python src/load_raw.py
+python src/load_warehouse.py
+```
+
+Run the last two a second time. Nothing should be duplicated.
+
+**5. Run it with Airflow**
+
+```powershell
+docker compose up
+```
+
+Wait a few minutes for the first start, then open http://localhost:8080. The username is `admin`. Get the generated password with:
+
+```powershell
+docker compose exec airflow cat /opt/airflow/standalone_admin_password.txt
+```
+
+Switch the `longevity_pipeline` DAG on and press Trigger. Airflow only runs while Docker is running, so a closed laptop means a skipped day.
+
+## Project layout
+
+```
+dags/        Airflow DAG definition
+src/         extract, load_raw, load_warehouse scripts
+sql/         schema and table definitions
+docs/        diagrams and screenshots
+```
+
+## Known limitations
+
+I'd rather be upfront about these than have you find them.
+
+- **No automated data quality checks yet.** This is the next thing I plan to add, as a final task in the DAG.
+- **`dim_marker` isn't enforced.** `marker_code` is stored as plain text in the fact table rather than as a foreign key. I haven't yet verified that every marker in the data exists in the lookup table.
+- **Country names are not cleaned.** Values like "USA" and "United States" are stored as they arrive (`flag_raw`), and some "flags" aren't countries at all.
+- **Not everything is loaded.** Placements history, badges, and proof image links are in the raw layer but not yet modeled in the warehouse. The `divisions` and `flags` endpoints are downloaded but unused.
+- **Small scale.** One run, one machine, one Airflow container. This isn't tuned for large volumes.
+
+## What I'd do next
+
+Add data quality checks as an Airflow task, build a country lookup table, model badges and placements, and put a simple dashboard on top of the daily snapshots.
+
+## Data source and credit
+
+All data comes from the public [Longevity World Cup](https://longevityworldcup.com) API. Credit to them for publishing it. The data describes real people, so please use it respectfully: this project is for learning data engineering, not for republishing anyone's personal health information.
+
+---
+
+Built by Adithya Nair · [GitHub](https://github.com/DeepstuffxP)
