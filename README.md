@@ -106,5 +106,3 @@ Switch on the `longevity_pipeline` DAG and press Trigger. Airflow only runs whil
 ## Data source
 
 Public API from [Longevity World Cup](https://longevityworldcup.com). It describes real people, so please use it respectfully. This project is for learning data engineering, not for republishing anyone's personal health information.
-
-Built by Adithya Nair · [GitHub](https://github.com/DeepstuffxP)
